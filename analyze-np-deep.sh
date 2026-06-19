@@ -108,7 +108,7 @@ if [[ -d "$NS_OVN/pods" ]]; then
             problem_nodes[$podname]="CPU-100%:$cpu_hits Dropped:$dropped"
             echo "  $podname — CPU-100%: $cpu_hits, Dropped: $dropped"
         fi
-    done < <(find "$NS_OVN/pods" -path "*/ovnkube-node-*/ovn-controller/logs/current.log" 2>/dev/null)
+    done < <(find "$NS_OVN/pods" -path "*/ovnkube-node-*/ovn-controller/*/logs/current.log" -o -path "*/ovnkube-node-*/ovn-controller/logs/current.log" 2>/dev/null)
 fi
 
 if [[ ${#problem_nodes[@]} -eq 0 ]]; then

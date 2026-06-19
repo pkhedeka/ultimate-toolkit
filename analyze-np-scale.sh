@@ -439,7 +439,7 @@ header "ovn-controller Health (per node)"
 
 ctrl_logs=""
 if [[ -d "$NS_OVN/pods" ]]; then
-    ctrl_logs=$(find "$NS_OVN/pods" -path "*/ovnkube-node-*/ovn-controller/logs/current.log" 2>/dev/null || true)
+    ctrl_logs=$(find "$NS_OVN/pods" \( -path "*/ovnkube-node-*/ovn-controller/*/logs/current.log" -o -path "*/ovnkube-node-*/ovn-controller/logs/current.log" \) 2>/dev/null || true)
 fi
 
 total_cpu_hits=0
