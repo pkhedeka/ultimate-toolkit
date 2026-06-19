@@ -6,14 +6,16 @@
 # Checks: nb_cfg sync gap, northd recomputes, ovn-controller saturation,
 #          ACL/Port_Group/AddressSet counts, ANP bloat, resource usage
 #
-# --scrub: sanitize hostnames, FQDNs, and IPs in output (safe for sharing)
+# --scrub (default): sanitize hostnames, FQDNs, and IPs in output (safe for sharing)
+# --no-scrub: show raw hostnames and IPs (for local analysis only)
 
 set -euo pipefail
 
-SCRUB=false
+SCRUB=true
 while [[ "${1:-}" == --* ]]; do
     case "$1" in
         --scrub) SCRUB=true; shift ;;
+        --no-scrub) SCRUB=false; shift ;;
         *) echo "Unknown flag: $1" >&2; exit 1 ;;
     esac
 done
