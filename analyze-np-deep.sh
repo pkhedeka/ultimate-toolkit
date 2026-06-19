@@ -131,41 +131,54 @@ for podname in "${!problem_nodes[@]}"; do
 
     subheader "$podname (${problem_nodes[$podname]})"
 
-    # a) AddressSet processing time
-    echo "    Address_Set / Port_Group update events:"
-    grep -iE "address.set|port.group" "$ctrl_log" 2>/dev/null | grep -iv "poll_loop" | tail -10 | while read -r l; do
+    total_lines=$(wc -l < "$ctrl_log" 2>/dev/null) || total_lines=0
+    echo "    Log size: $total_lines lines"
+
+    # a) Log module breakdown (what's generating traffic)
+    echo "    Log module breakdown (top 10):"
+    grep -oP '\|\d+\|\K[^|]+' "$ctrl_log" 2>/dev/null | sort | uniq -c | sort -rn | head -10 | while read -r count mod; do
+        printf "      %-25s %s events\n" "$mod" "$count"
+    done
+
+    # b) Errors and warnings (OVN format: |ERR| or |WARN|)
+    err_count=$(grep -c '|ERR|' "$ctrl_log" 2>/dev/null) || err_count=0
+    warn_count=$(grep -c '|WARN|' "$ctrl_log" 2>/dev/null) || warn_count=0
+    echo "    Errors: $err_count, Warnings: $warn_count"
+    if [[ "$err_count" -gt 0 ]]; then
+        echo "    Last errors:"
+        grep '|ERR|' "$ctrl_log" 2>/dev/null | tail -5 | while read -r l; do
+            echo "      $l"
+        done
+    fi
+    if [[ "$warn_count" -gt 0 ]]; then
+        echo "    Last warnings:"
+        grep '|WARN|' "$ctrl_log" 2>/dev/null | tail -5 | while read -r l; do
+            echo "      $l"
+        done
+    fi
+
+    # c) CPU-100% timestamps (for correlation)
+    cpu_events=$(grep -c "100% CPU" "$ctrl_log" 2>/dev/null) || cpu_events=0
+    if [[ "$cpu_events" -gt 0 ]]; then
+        echo "    CPU-100% event timestamps (first 10):"
+        grep "100% CPU" "$ctrl_log" 2>/dev/null | head -10 | grep -oP '^\S+' | while read -r ts; do
+            echo "      $ts"
+        done
+    fi
+
+    # d) Dropped messages with counts
+    echo "    Dropped message bursts:"
+    grep "Dropped" "$ctrl_log" 2>/dev/null | grep -oP 'Dropped \K[0-9]+' | awk '
+        {total+=$1; count++; if($1>max) max=$1}
+        END{if(count>0) printf "      %d bursts, total %d msgs dropped, max single burst: %d\n", count, total, max}
+    ' 2>/dev/null
+
+    # e) Non-poll_loop log entries (last 20 — the actual interesting stuff)
+    echo "    Recent non-poll_loop log entries (last 20):"
+    grep -v "poll_loop" "$ctrl_log" 2>/dev/null | tail -20 | while read -r l; do
         echo "      $l"
     done
 
-    # b) lflow_run / recompute events
-    echo "    lflow_run / recompute events:"
-    grep -iE "lflow_run|lflow.*recompute|full recompute" "$ctrl_log" 2>/dev/null | tail -5 | while read -r l; do
-        echo "      $l"
-    done
-
-    # c) Binding updates (patch port, claim)
-    echo "    Binding claim/release events:"
-    grep -iE "claim|release|binding" "$ctrl_log" 2>/dev/null | grep -iv "poll_loop\|mac_binding" | tail -5 | while read -r l; do
-        echo "      $l"
-    done
-
-    # d) Errors and warnings
-    echo "    Errors/Warnings (last 10):"
-    grep -iE "\|ERR\||\|WARN\|" "$ctrl_log" 2>/dev/null | tail -10 | while read -r l; do
-        echo "      $l"
-    done
-
-    # e) 100% CPU timestamps (for correlation)
-    echo "    CPU-100% timestamps:"
-    grep "100% CPU" "$ctrl_log" 2>/dev/null | head -10 | grep -oP '^\S+' | while read -r ts; do
-        echo "      $ts"
-    done
-
-    # f) Flow installation stats
-    echo "    Flow update stats:"
-    grep -iE "flow.*added|flow.*deleted|flow.*modified|installed.*flow" "$ctrl_log" 2>/dev/null | tail -5 | while read -r l; do
-        echo "      $l"
-    done
     echo ""
 done
 
@@ -294,14 +307,19 @@ if [[ -d "$np_dir" ]]; then
         grep -m1 "namespace:" "$f" 2>/dev/null | awk '{print $2}'
     done | sort | uniq -c | sort -rn | head -10 | while read -r count ns; do
         printf "  %-50s %s NPs\n" "$ns" "$count"
-    done
+    done || echo "  No NP YAMLs found in cluster-scoped-resources"
 else
     # Try from namespaced resources
-    find "$INNER_DIR/namespaces" -path "*/networking.k8s.io/networkpolicies/*.yaml" 2>/dev/null | \
+    found=$(find "$INNER_DIR/namespaces" -path "*/networking.k8s.io/networkpolicies/*.yaml" 2>/dev/null | \
         awk -F'/' '{for(i=1;i<=NF;i++) if($(i)=="namespaces") print $(i+1)}' | \
-        sort | uniq -c | sort -rn | head -10 | while read -r count ns; do
+        sort | uniq -c | sort -rn | head -10) || true
+    if [[ -n "$found" ]]; then
+        echo "$found" | while read -r count ns; do
             printf "  %-50s %s NPs\n" "$ns" "$count"
         done
+    else
+        echo "  No NetworkPolicy resources found in must-gather"
+    fi
 fi
 
 # =====================================================================
@@ -310,19 +328,25 @@ fi
 header "Problem Timeline"
 
 echo "  CPU-100% event distribution (by hour):"
-find "$NS_OVN/pods" -path "*/ovn-controller/*/logs/current.log" -o -path "*/ovn-controller/logs/current.log" 2>/dev/null | while read -r f; do
-    grep "100% CPU" "$f" 2>/dev/null
-done | grep -oP '^\S+T\d{2}' 2>/dev/null | sort | uniq -c | sort -rn | head -10 | while read -r count hour; do
-    echo "    $hour:xx — $count events"
-done
+cpu_timeline=$(find "$NS_OVN/pods" \( -path "*/ovn-controller/*/logs/current.log" -o -path "*/ovn-controller/logs/current.log" \) 2>/dev/null | while read -r f; do
+    grep "100% CPU" "$f" 2>/dev/null || true
+done | grep -oP '^\S+T\d{2}' 2>/dev/null | sort | uniq -c | sort -rn | head -10) || true
+if [[ -n "$cpu_timeline" ]]; then
+    echo "$cpu_timeline" | while read -r count hour; do echo "    $hour:xx — $count events"; done
+else
+    echo "    No CPU-100% events found"
+fi
 
 echo ""
 echo "  Dropped messages distribution (by hour):"
-find "$NS_OVN/pods" -path "*/ovn-controller/*/logs/current.log" -o -path "*/ovn-controller/logs/current.log" 2>/dev/null | while read -r f; do
-    grep "Dropped.*log messages" "$f" 2>/dev/null
-done | grep -oP '^\S+T\d{2}' 2>/dev/null | sort | uniq -c | sort -rn | head -10 | while read -r count hour; do
-    echo "    $hour:xx — $count events"
-done
+drop_timeline=$(find "$NS_OVN/pods" \( -path "*/ovn-controller/*/logs/current.log" -o -path "*/ovn-controller/logs/current.log" \) 2>/dev/null | while read -r f; do
+    grep "Dropped.*log messages" "$f" 2>/dev/null || true
+done | grep -oP '^\S+T\d{2}' 2>/dev/null | sort | uniq -c | sort -rn | head -10) || true
+if [[ -n "$drop_timeline" ]]; then
+    echo "$drop_timeline" | while read -r count hour; do echo "    $hour:xx — $count events"; done
+else
+    echo "    No dropped message events found"
+fi
 
 echo ""
 
