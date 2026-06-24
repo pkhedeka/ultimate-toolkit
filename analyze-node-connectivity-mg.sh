@@ -224,7 +224,7 @@ else:
 
 print(f"  __issues__:{issues}")
 PYEOF
-        "$node_file" 2>/dev/null)
+        2>/dev/null)
 
         node_issues=$(echo "$result" | grep '__issues__:' | cut -d: -f2)
         echo "$result" | grep -v '__issues__:'
