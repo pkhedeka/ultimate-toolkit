@@ -65,6 +65,8 @@ def replace_fqdn(m):
     fqdn = m.group(0)
     if fqdn.startswith(('quay-io', 'registry-')) or fqdn.endswith(('.log', '.yaml', '.gz', '.tar', '.txt')):
         return fqdn
+    if re.match(r'^\d+\.\d+\.\d', fqdn):
+        return fqdn
     if fqdn not in host_map:
         lower = fqdn.lower()
         if 'master' in lower or 'control-plane' in lower:
@@ -116,15 +118,15 @@ for line in sys.stdin:
 
 main() {
 
-# Auto-detect sosreport root
-SOS_ROOT=$(find "$SOS" -maxdepth 3 -type f -name "hostname" -print -quit 2>/dev/null)
+# Auto-detect sosreport root — look for sos_commands dir (unique to sosreport root)
+SOS_ROOT=$(find "$SOS" -maxdepth 3 -type d -name "sos_commands" -print -quit 2>/dev/null)
 if [[ -n "$SOS_ROOT" ]]; then
     SOS_ROOT=$(dirname "$SOS_ROOT")
 else
     SOS_ROOT="$SOS"
 fi
 echo "SOSreport root: $SOS_ROOT"
-echo "Hostname: $(cat "$SOS_ROOT/hostname" 2>/dev/null || echo 'unknown')"
+echo "Hostname: $(cat "$SOS_ROOT/hostname" 2>/dev/null || cat "$SOS_ROOT/etc/hostname" 2>/dev/null || echo 'unknown')"
 echo "Scrubbing: $SCRUB"
 
 SOS_OVS_CMD=$(find "$SOS_ROOT" -path "*/sos_commands/openvswitch*" -type d 2>/dev/null | head -1)

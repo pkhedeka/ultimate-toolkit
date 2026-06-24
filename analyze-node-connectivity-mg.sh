@@ -65,6 +65,8 @@ def replace_fqdn(m):
     fqdn = m.group(0)
     if fqdn.startswith(('quay-io', 'registry-')) or fqdn.endswith(('.log', '.yaml', '.gz', '.tar', '.txt')):
         return fqdn
+    if re.match(r'^\d+\.\d+\.\d', fqdn):
+        return fqdn
     if fqdn not in host_map:
         lower = fqdn.lower()
         if 'master' in lower or 'control-plane' in lower:
@@ -131,9 +133,34 @@ header "1. CLUSTER VERSION & PLATFORM"
 # --------------------------------------------------
 CV_FILE="$MG_ROOT/cluster-scoped-resources/config.openshift.io/clusterversions/version.yaml"
 if [[ -f "$CV_FILE" ]]; then
-    grep -E '^\s+(version:|channel:)' "$CV_FILE" 2>/dev/null | head -5
+    python3 -c "
+import yaml, sys
+try:
+    with open('$CV_FILE') as f:
+        doc = yaml.safe_load(f)
+    spec = doc.get('spec', {})
+    status = doc.get('status', {})
+    print(f\"  channel: {spec.get('channel', 'unknown')}\")
+    history = status.get('history', [])
+    if history:
+        print(f\"  version: {history[0].get('version', 'unknown')}\")
+        print(f\"  state: {history[0].get('state', 'unknown')}\")
+except Exception as e:
+    print(f'  parse error: {e}')
+" 2>/dev/null
     INFRA_FILE=$(find "$MG_ROOT" -path "*infrastructures/cluster.yaml" 2>/dev/null | head -1)
-    [[ -n "$INFRA_FILE" ]] && grep -E 'platform:|type:' "$INFRA_FILE" 2>/dev/null | head -3
+    if [[ -n "$INFRA_FILE" ]]; then
+        python3 -c "
+import yaml
+try:
+    with open('$INFRA_FILE') as f:
+        doc = yaml.safe_load(f)
+    ptype = doc.get('status', {}).get('platformStatus', {}).get('type', 'unknown')
+    print(f'  platform: {ptype}')
+except Exception as e:
+    print(f'  parse error: {e}')
+" 2>/dev/null
+    fi
 else
     echo "  version.yaml not found"
 fi
@@ -150,35 +177,58 @@ if [[ -d "$NODES_DIR" ]]; then
         node=$(basename "$node_file" .yaml)
         echo "--- $node ---"
 
-        chassis=$(grep 'k8s.ovn.org/node-chassis-id' "$node_file" 2>/dev/null | head -1 | sed 's/.*: *//' | tr -d '"' | tr -d "'")
-        echo "  chassis-id: ${chassis:-MISSING}"
-        [[ -z "$chassis" ]] && { echo -e "  ${RED}*** chassis-id MISSING ***${RST}"; ((annotation_issues++)); }
+        result=$(python3 << 'PYEOF'
+import yaml, json, sys
 
-        subnets=$(grep 'k8s.ovn.org/node-subnets' "$node_file" 2>/dev/null | head -1 | sed 's/.*: *//')
-        echo "  node-subnets: ${subnets:-MISSING}"
+node_file = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    with open(node_file) as f:
+        doc = yaml.safe_load(f)
+except Exception as e:
+    print(f"  parse error: {e}")
+    sys.exit(0)
 
-        hostcidrs=$(grep 'k8s.ovn.org/host-cidrs' "$node_file" 2>/dev/null | head -1 | sed 's/.*: *//')
-        echo "  host-cidrs: ${hostcidrs:-MISSING}"
+annotations = doc.get("metadata", {}).get("annotations", {})
+issues = 0
 
-        ifaddr=$(grep 'k8s.ovn.org/node-primary-ifaddr' "$node_file" 2>/dev/null | head -1 | sed 's/.*: *//')
-        echo "  primary-ifaddr: ${ifaddr:-MISSING}"
+ovn_keys = {
+    "chassis-id": "k8s.ovn.org/node-chassis-id",
+    "node-subnets": "k8s.ovn.org/node-subnets",
+    "host-cidrs": "k8s.ovn.org/host-cidrs",
+    "primary-ifaddr": "k8s.ovn.org/node-primary-ifaddr",
+}
 
-        l3gw_raw=$(grep 'k8s.ovn.org/l3-gateway-config' "$node_file" 2>/dev/null | head -1 | sed 's/.*: *//')
-        if [[ -n "$l3gw_raw" ]]; then
-            l3gw_clean=$(echo "$l3gw_raw" | sed "s/^'//" | sed "s/'$//" | tr -d '\n')
-            if echo "$l3gw_clean" | python3 -m json.tool >/dev/null 2>&1; then
-                l3gw_len=$(echo "$l3gw_clean" | wc -c)
-                echo "  l3-gateway-config: VALID JSON ($l3gw_len bytes)"
-            else
-                echo -e "  l3-gateway-config: ${RED}*** INVALID/TRUNCATED JSON ***${RST}"
-                echo "    RAW (first 200 chars): ${l3gw_raw:0:200}"
-                echo "    RAW (last 50 chars):   ${l3gw_raw: -50}"
-                ((annotation_issues++))
-            fi
-        else
-            echo -e "  l3-gateway-config: ${YEL}*** MISSING ***${RST}"
-            ((annotation_issues++))
-        fi
+for label, key in ovn_keys.items():
+    val = annotations.get(key, "")
+    if val:
+        print(f"  {label}: {val}")
+    else:
+        print(f"  {label}: MISSING")
+        if label == "chassis-id":
+            issues += 1
+
+l3gw = annotations.get("k8s.ovn.org/l3-gateway-config", "")
+if l3gw:
+    try:
+        parsed = json.loads(l3gw)
+        print(f"  l3-gateway-config: VALID JSON ({len(l3gw)} bytes)")
+    except json.JSONDecodeError as e:
+        print(f"  l3-gateway-config: *** INVALID/TRUNCATED JSON ***")
+        print(f"    Error: {e}")
+        print(f"    RAW (first 200 chars): {l3gw[:200]}")
+        print(f"    RAW (last 50 chars):   {l3gw[-50:]}")
+        issues += 1
+else:
+    print(f"  l3-gateway-config: *** MISSING ***")
+    issues += 1
+
+print(f"  __issues__:{issues}")
+PYEOF
+        "$node_file" 2>/dev/null)
+
+        node_issues=$(echo "$result" | grep '__issues__:' | cut -d: -f2)
+        echo "$result" | grep -v '__issues__:'
+        annotation_issues=$((annotation_issues + ${node_issues:-0}))
         echo ""
     done
 else
