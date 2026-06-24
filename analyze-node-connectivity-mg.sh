@@ -177,7 +177,7 @@ if [[ -d "$NODES_DIR" ]]; then
         node=$(basename "$node_file" .yaml)
         echo "--- $node ---"
 
-        result=$(python3 << 'PYEOF'
+        result=$(python3 - "$node_file" << 'PYEOF'
 import yaml, json, sys
 
 node_file = sys.argv[1] if len(sys.argv) > 1 else ""
