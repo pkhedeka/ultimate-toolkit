@@ -7,8 +7,8 @@
 # namespace and a known-good one. Flags missing port-group membership,
 # orphaned ACLs, and address set mismatches.
 #
-# Designed for OCPBUGS-88688 class bugs: NP enforcement stops after ownership
-# migration, ArgoCD churn, or controller re-sync.
+# Detects stale NP state after mass re-sync events (e.g., GitOps tracking
+# migration, controller ownership changes, API server reconnects).
 #
 # --scrub (default): sanitize hostnames, FQDNs, and IPs in output
 # --no-scrub: show raw data (for local analysis only)
@@ -340,7 +340,7 @@ if broken_stats and good_stats:
         print(f"    {key:20s}  broken={bv:5d}  good={gv:5d}{marker}")
 
     if broken_stats.get("orphan_lsps", 0) > 0:
-        print(f"\n    *** VERDICT: Stale port-group membership — OCPBUGS-87020 class ***")
+        print(f"\n    *** VERDICT: Stale port-group membership detected ***")
         print(f"    *** Pods exist but not in NP port groups = NP not enforced ***")
 
 PYEOF
@@ -460,7 +460,7 @@ echo ""
 echo "  Key things to check in the output above:"
 echo ""
 echo "  1. Port Group 'Ports' count vs LSP count"
-echo "     - If PG has 0 ports but LSPs exist → stale port-group (OCPBUGS-87020 class)"
+echo "     - If PG has 0 ports but LSPs exist → stale port-group membership"
 echo "     - NP won't apply to pods not in port groups"
 echo ""
 echo "  2. ACL completeness per NP"

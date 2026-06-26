@@ -7,7 +7,8 @@
 # NB database for stale Port Group membership (pods exist but not in PG).
 # No need to know which namespace is broken — the script finds them.
 #
-# Designed for OCPBUGS-88688: NP enforcement stops after mass re-sync events.
+# Detects stale NP state after mass re-sync events (e.g., GitOps tracking
+# migration, controller ownership changes, API server reconnects).
 
 set -euo pipefail
 
@@ -300,7 +301,7 @@ print(f"  NB databases (zones):            {len(nbdb_files)}")
 print()
 
 if stale_namespaces:
-    print("  VERDICT: Stale NP state detected — OCPBUGS-87020/88688 class")
+    print("  VERDICT: Stale NP port-group membership detected")
     print()
     print("  Workaround — touch all NPs to force reconcile (non-disruptive):")
     print()
